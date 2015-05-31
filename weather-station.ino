@@ -1,33 +1,33 @@
-/* 
+/*
  Weather Station using the Electric Imp
  By: Nathan Seidle
  SparkFun Electronics
  Date: October 4th, 2013
  License: This code is public domain but you buy me a beer if you use this and we meet someday (Beerware license).
- 
+
  Much of this is based on Mike Grusin's USB Weather Board code.
- 
+
  This code reads all the various sensors (wind speed, direction, rain gauge, humidty, pressure, light, batt_lvl)
  and sends it to the imp, which then forwards that data to an Imp Agent on the cloud that does some processing then
  bounces the weather data to Wunderground.
- 
+
  The Imp Shield has Card Detect tied to pin A0. We use A0 for wind direction. You will need to cut the trace on the Imp shield.
- 
+
  Current:
  130 for 2 seconds while transmitting
  ~30mA during sleep
- 
+
  Todo:
  Reset after 45 days to avoid millis roll over problems
- 
+
  What was the wind direction and speed gust for the last 10 minutes?
  Is the 3.3V pin tied on the weather shield or elsewhere?
  */
 
 #include <avr/wdt.h> //We need watch dog for this program
 #include <Wire.h> //I2C needed for sensors
-#include "MPL3115A2.h" //Pressure sensor
-#include "HTU21D.h" //Humidity sensor
+#include "SparkFunMPL3115A2.h" //Pressure sensor
+#include "SparkFunHTU21D.h" //Humidity sensor
 
 //#define ENABLE_LIGHTNING
 
@@ -154,6 +154,10 @@ void setup()
   wdt_reset(); //Pet the dog
   wdt_disable(); //We don't want the watchdog during init
 
+  Wire.begin(0x22);
+  Wire.onRequest(sendData);
+  Wire.onReceive(receiveData);
+
   Serial.begin(9600);
 
   pinMode(WSPEED, INPUT_PULLUP); // input from wind meters windspeed sensor
@@ -172,7 +176,7 @@ void setup()
   myPressure.begin(); // Get sensor online
   myPressure.setModeBarometer(); // Measure pressure in Pascals from 20 to 110 kPa
   myPressure.setOversampleRate(128); // Set Oversample to the recommended 128
-  myPressure.enableEventFlags(); // Enable all three pressure and temp event flags 
+  myPressure.enableEventFlags(); // Enable all three pressure and temp event flags
   myPressure.setModeActive(); // Go to active mode and start measuring!
 
   //Configure the humidity sensor
@@ -192,10 +196,20 @@ void setup()
   // turn on interrupts
   interrupts();
 
-  Serial.println("Wimp Weather Station online!");
-  reportWeather();
+  wdt_enable(WDTO_4S); //Unleash the beast
+}
 
-  //  wdt_enable(WDTO_1S); //Unleash the beast
+int reading = 0;
+byte flag = 0xff;
+// callback for sending data
+void sendData(){
+  reportWeather();
+}
+
+// Set which piece of data we want to receive
+void receiveData(int numBytes)
+{
+  flag = Wire.read();
 }
 
 void loop()
@@ -249,10 +263,14 @@ void loop()
       rainHour[minutes] = 0; //Zero out this minute's rainfall amount
       windgust_10m[minutes_10m] = 0; //Zero out this minute's gust
 
-      minutesSinceLastReset++; //It's been another minute since last night's midnight reset     
+      minutesSinceLastReset++; //It's been another minute since last night's midnight reset
     }
   }
-  
+
+  reading = 1;
+  calcWeather();
+  reading = 0;
+
   //Check to see if there's been lighting
 #ifdef ENABLE_LIGHTNING
   if(digitalRead(LIGHTNING_IRQ) == HIGH)
@@ -261,9 +279,9 @@ void loop()
     lightning_distance = readLightning();
   }
 #endif
-  
 
   //Wait for the imp to ping us with the ! character
+
   if(Serial.available())
   {
     byte incoming = Serial.read();
@@ -271,13 +289,13 @@ void loop()
     {
       reportWeather(); //Send all the current readings out the imp and to its agent for posting to wunderground. Takes 196ms
       //Serial.print("Pinged!");
-      
+
 #ifdef ENABLE_LIGHTNING
       //Give imp time to transmit then read any erroneous lightning strike
-      delay(1000); //Give the Imp time to transmit 
+      delay(1000); //Give the Imp time to transmit
       readLightning(); //Clear any readings and forget it
 #endif
-      
+
     }
     else if(incoming == '@') //Special character from Imp indicating midnight local time
     {
@@ -299,7 +317,7 @@ void loop()
     //Serial.print("Emergency midnight reset");
   }
 
-  delay(100); //Update every 100ms. No need to go any faster.
+  delay(1000); //Update every 1000ms. No need to go any faster.
 }
 
 //Prints the various arrays for debugging
@@ -380,7 +398,7 @@ void calcWeather()
   //Find the largest windgust in the last 10 minutes
   windgustmph_10m = 0;
   windgustdir_10m = 0;
-  //Step through the 10 minutes  
+  //Step through the 10 minutes
   for(int i = 0; i < 10 ; i++)
   {
     if(windgust_10m[i] > windgustmph_10m)
@@ -403,7 +421,7 @@ void calcWeather()
 
   //Total rainfall for the day is calculated within the interrupt
   //Calculate amount of rainfall for the last 60 minutes
-  rainin = 0;  
+  rainin = 0;
   for(int i = 0 ; i < 60 ; i++)
     rainin += rainHour[i];
 
@@ -477,7 +495,7 @@ float get_wind_speed()
   return(windSpeed);
 }
 
-int get_wind_direction() 
+int get_wind_direction()
 // read the wind direction sensor, return heading in degrees
 {
   unsigned int adc;
@@ -510,8 +528,7 @@ int get_wind_direction()
 //Reports the weather string to the Imp
 void reportWeather()
 {
-  calcWeather(); //Go calc all the various sensors
-
+/*
   Serial.print("$,winddir=");
   Serial.print(winddir);
   Serial.print(",windspeedmph=");
@@ -550,9 +567,62 @@ void reportWeather()
 
   Serial.print(",");
   Serial.println("#,");
+  */
 
-  //Test string
-  //Serial.println("$,winddir=270,windspeedmph=0.0,windgustmph=0.0,windgustdir=0,windspdmph_avg2m=0.0,winddir_avg2m=12,windgustmph_10m=0.0,windgustdir_10m=0,humidity=998.0,tempf=-1766.2,rainin=0.00,dailyrainin=0.00,-999.00,batt_lvl=16.11,light_lvl=3.32,#,");
+  char buffer[32];
+
+  switch ((int)flag) {
+    case 0:
+      dtostrf(winddir, 1, 0, buffer);
+      break;
+    case 1:
+      dtostrf(windspeedmph, 1, 2, buffer);
+      break;
+    case 2:
+      dtostrf(windgustmph, 1, 2, buffer);
+      break;
+    case 3:
+      dtostrf(windgustdir, 1, 0, buffer);
+      break;
+    case 4:
+      dtostrf(windspdmph_avg2m, 1, 1, buffer);
+      break;
+    case 5:
+      dtostrf(winddir_avg2m, 1, 0, buffer);
+      break;
+    case 6:
+      dtostrf(windgustmph_10m, 1, 1, buffer);
+      break;
+    case 7:
+      dtostrf(windgustdir_10m, 1, 0, buffer);
+      break;
+    case 8:
+      dtostrf(humidity, 1, 1, buffer);
+      break;
+    case 9:
+      dtostrf(tempf, 1, 1, buffer);
+      break;
+    case 10:
+      dtostrf(rainin, 1, 2, buffer);
+      break;
+    case 11:
+      dtostrf(dailyrainin, 1, 2, buffer);
+      break;
+    case 12:
+      dtostrf(pressure, 1, 2, buffer);
+      break;
+    case 13:
+      dtostrf(batt_lvl, 1, 2, buffer);
+      break;
+    case 14:
+      dtostrf(light_lvl, 1, 2, buffer);
+      break;
+    default:
+      dtostrf(-1, 1, 1, buffer);
+      break;
+  }
+
+  Wire.write(buffer);
 }
 
 //Takes an average of readings on a given pin
@@ -560,13 +630,13 @@ void reportWeather()
 int averageAnalogRead(int pinToRead)
 {
   byte numberOfReadings = 8;
-  unsigned int runningValue = 0; 
+  unsigned int runningValue = 0;
 
   for(int x = 0 ; x < numberOfReadings ; x++)
     runningValue += analogRead(pinToRead);
   runningValue /= numberOfReadings;
 
-  return(runningValue);  
+  return(runningValue);
 }
 
 //The following is for the AS3935 lightning sensor
@@ -574,43 +644,43 @@ int averageAnalogRead(int pinToRead)
 byte readLightning(void)
 {
   byte distance = 0;
-  
+
   //Check to see if we have lightning!
   if(digitalRead(LIGHTNING_IRQ) == HIGH)
   {
     // first step is to find out what caused interrupt
     // as soon as we read interrupt cause register, irq pin goes low
     int irqSource = AS3935.interruptSource();
-  
+
     // returned value is bitmap field, bit 0 - noise level too high, bit 2 - disturber detected, and finally bit 3 - lightning!
     if (irqSource & 0b0001)
     {
       //Serial.println("Noise level too high, try adjusting noise floor");
     }
-  
+
     if (irqSource & 0b0100)
     {
       //Serial.println("Disturber detected");
       distance = 64;
     }
-  
+
     if (irqSource & 0b1000)
     {
       // need to find how far that lightning stroke, function returns approximate distance in kilometers,
       // where value 1 represents storm in detector's near victinity, and 63 - very distant, out of range stroke
       // everything in between is just distance in kilometers
       distance = AS3935.lightningDistanceKm();
-      
+
       //Serial.print("Lightning: ");
       //Serial.print(lightning_distance, DEC);
       //Serial.println(" km");
-  
+
       //The AS3935 remembers the nearest strike distance. For example 15km away then 10, then overhead all following
       //distances (10, 20, 30) will instead output as 'Storm overhead, watch out!'. Resetting the chip erases this.
       lightning_init();
-    }  
+    }
   }
-  
+
   return(distance);
 }
 
@@ -627,7 +697,7 @@ void startLightning(void)
   SPI.setClockDivider(SPI_CLOCK_DIV16); //Uno 16MHz / 16 = 1MHz
 
   SPI.setBitOrder(MSBFIRST); // and chip is MSB first
-  
+
   lightning_init(); //Setup the values for the sensor
 
   Serial.println("Lightning sensor online");
@@ -662,7 +732,7 @@ void lightning_init()
   Serial.print("Spike rejection is: ");
   Serial.println(spikeRejection, DEC);
   Serial.print("Watchdog threshold is: ");
-  Serial.println(watchdogThreshold, DEC);  
+  Serial.println(watchdogThreshold, DEC);
 }*/
 
 byte SPItransfer(byte sendByte)
@@ -670,7 +740,3 @@ byte SPItransfer(byte sendByte)
   return SPI.transfer(sendByte);
 }
 #endif
-
-
-
-
